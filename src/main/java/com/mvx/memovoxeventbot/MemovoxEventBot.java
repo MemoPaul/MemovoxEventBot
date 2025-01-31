@@ -51,7 +51,7 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
     @Override
     public String getBotToken() {
         // Replace with your real event bot token from BotFather
-        return "7491846746:AAGSh_DY3QMNzmQegprwtelbW56EkdET7mo";
+        return System.getenv("BOT_TOKEN");
     }
 
     /**
