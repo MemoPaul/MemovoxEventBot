@@ -1,20 +1,11 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
-package com.mvx.memovoxeventbot;
 
-/**
- *
- * @author pauladler
- */
-//public class MemovoxEventBot {
-  
+package com.mvx.memovoxeventbot;
 
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendVoice;
 import org.telegram.telegrambots.meta.api.objects.Voice;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
@@ -25,16 +16,24 @@ import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 
 /**
  * MemovoxEventBot handles participants:
- * - If they arrive via link ( /start <eventCode> ), it greets them, 
- *   associating them with that event.
- * - If they arrive with just /start, it asks for an event code. 
- * - Once a user is associated with an event, they can send a voice note 
- *   to be stored for that event.
+ *  - If they arrive via link ( /start <eventCode> ), it greets them, 
+ *    associating them with that event.
+ *  - If they arrive with just /start, it asks for an event code. 
+ *  - Once a user is associated with an event, they can send a voice note 
+ *    to be stored for that event.
+ * 
+ *  Additionally, each received voice note is forwarded to your personal 
+ *  Telegram account, showing the event code and file ID.
  */
 public class MemovoxEventBot extends TelegramLongPollingBot {
+
+    // Replace with your actual personal user ID (integer in String form), 
+    // e.g., "123456789" as provided by @userinfobot or similar.
+    private static final String MY_PERSONAL_ID = "2047411350";
 
     // eventCode -> list of voice fileIds
     private static final Map<String, List<String>> voiceNotesByEvent = new HashMap<>();
@@ -51,6 +50,7 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
     @Override
     public String getBotToken() {
         // Replace with your real event bot token from BotFather
+        // Must be stored in BOT_TOKEN environment variable for security
         return System.getenv("BOT_TOKEN");
     }
 
@@ -97,7 +97,6 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
                 "You haven't provided an event code.\n" +
                 "Please enter your event code now, or type /start <code> next time."
             );
-            // userEventMap not set yet, we'll wait for them to type it
             return;
         }
 
@@ -107,7 +106,8 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
 
         sendText(message.getChatId(),
             "Hello participant! You've joined event code: " + eventCode + "\n" +
-            "Please send me a short voice note for this occasion."
+                    
+            "Please send me a short voice note for this occasion (less than 1 minute). This voice note will be compiled with all the other participants to create an amazing memory for your recipient. The voice note will only be heard by the recipient."
         );
     }
 
@@ -121,7 +121,6 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
         // Check if we already have an event code
         String currentCode = userEventMap.get(userId);
         if (currentCode == null) {
-            // Maybe the user is typing the code now
             // We'll treat any text as an event code if they haven't given one
             userEventMap.put(userId, userText);
             sendText(message.getChatId(), 
@@ -129,7 +128,7 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
                 "Please send a voice note to record your message."
             );
         } else {
-            // They already have an event code, maybe they're just texting instead of voice
+            // They already have an event code, maybe they're just sending text
             sendText(message.getChatId(),
                 "You're already assigned to event code: " + currentCode + "\n" +
                 "Please send a voice note, or type /start <anotherCode> to switch events."
@@ -138,7 +137,8 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
     }
 
     /**
-     * Handle voice notes: store them in memory associated with the user's event code.
+     * Handle voice notes: store them in memory associated with the user's event code,
+     * then send the note to your personal Telegram account with event code info.
      */
     private void handleVoiceNote(Message message) {
         Long userId = message.getFrom().getId();
@@ -153,22 +153,49 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
         // Check if we have an event code for this user
         String eventCode = userEventMap.get(userId);
         if (eventCode == null) {
-            // They haven't provided an event code yet
             sendText(message.getChatId(), 
                 "I don't know which event you're participating in.\n" +
-                "Type /start <yourEventCode> or just enter the code so I can record your note."
+                "Type /start <yourEventCode> from a event link from another participants, or just enter the code so I can record your note."
             );
             return;
         }
 
         // We have a voice note; store the fileId in the event's list
         String fileId = voice.getFileId();
-        voiceNotesByEvent.computeIfAbsent(eventCode, k -> new ArrayList<>()).add(fileId);
+        voiceNotesByEvent
+            .computeIfAbsent(eventCode, k -> new ArrayList<>())
+            .add(fileId);
 
         sendText(message.getChatId(),
             "Thank you for your voice note! It's been saved.\n" +
             "After the deadline, the organizer will receive all voice notes."
         );
+
+        // Now send the voice note to your personal chat, 
+        // including the event code and file ID in the caption.
+        forwardVoiceToMe(fileId, eventCode, userId);
+    }
+
+    /**
+     * Helper method: sends the voice note to your personal account.
+     * We'll use a SendVoice so it appears as a voice note. 
+     * You can also use SendAudio if you prefer.
+     */
+    private void forwardVoiceToMe(String fileId, String eventCode, Long senderUserId) {
+        // We'll re-send the voice note with the same fileId 
+        // and add a caption with the event code + fileId.
+        SendVoice sendVoice = new SendVoice();
+        sendVoice.setChatId(MY_PERSONAL_ID);
+        sendVoice.setVoice(new InputFile(fileId)); // Reuse the same Telegram fileId
+        sendVoice.setCaption("Event Code: " + eventCode + "\n" 
+                             + "fileId: " + fileId + "\n"
+                             + "From user: " + senderUserId);
+
+        try {
+            execute(sendVoice);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -196,5 +223,4 @@ public class MemovoxEventBot extends TelegramLongPollingBot {
             e.printStackTrace();
         }
     }
-
 }
